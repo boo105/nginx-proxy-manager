@@ -33,6 +33,30 @@ const handleUpstreamNameConflict = (error) => {
 
 const internalProxyHost = {
 	/**
+	 * Refuse a name another proxy host already holds before writing it. The backend runs with
+	 * --abort_on_uncaught_exception, and with that flag the UNIQUE error better-sqlite3 throws
+	 * aborts the process even though handleUpstreamNameConflict would catch it. The unique
+	 * index stays as the last line of defence for the other database engines.
+	 * Call it while holding the upstream name lock, so no other request can take the name in between.
+	 *
+	 * @param   {String|null}  name     Normalized upstream name
+	 * @param   {Number}       [hostId] Proxy host being updated, which may keep its own name
+	 * @returns {Promise}
+	 */
+	assertUpstreamNameAvailable: async (name, hostId) => {
+		if (!name) {
+			return;
+		}
+		const query = proxyHostModel.query().select("id").where("upstream_name", name);
+		if (hostId) {
+			query.whereNot("id", hostId);
+		}
+		if (await query.first()) {
+			throw new errs.ValidationError("Upstream name is already in use");
+		}
+	},
+
+	/**
 	 * @param   {Access}  access
 	 * @param   {Object}  data
 	 * @returns {Promise}
@@ -87,7 +111,9 @@ const internalProxyHost = {
 				internalHost.assertAdvancedConfigAllowed(access, thisData);
 
 				return withUpstreamNameLocks([thisData.upstream_name], () =>
-					proxyHostModel.query().insertAndFetch(thisData).catch(handleUpstreamNameConflict),
+					internalProxyHost
+						.assertUpstreamNameAvailable(thisData.upstream_name)
+						.then(() => proxyHostModel.query().insertAndFetch(thisData).catch(handleUpstreamNameConflict)),
 				).then(utils.omitRow(omissions()));
 			})
 			.then((row) => {
@@ -230,10 +256,12 @@ const internalProxyHost = {
 
 					thisData = internalHost.cleanSslHstsData(thisData, row);
 
-					return proxyHostModel
-						.query()
-						.where({ id: thisData.id })
-						.patch(thisData)
+					return (
+						names.length
+							? internalProxyHost.assertUpstreamNameAvailable(thisData.upstream_name, row.id)
+							: Promise.resolve()
+					)
+						.then(() => proxyHostModel.query().where({ id: thisData.id }).patch(thisData))
 						.catch(handleUpstreamNameConflict)
 						.then(utils.omitRow(omissions()))
 						.then((saved_row) => {

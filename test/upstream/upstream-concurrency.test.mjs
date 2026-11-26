@@ -129,6 +129,7 @@ test("delete waits for an in-flight rename and releases the final upstream name"
 	const entered = deferred();
 	const release = deferred();
 	t.after(() => release.resolve());
+	t.mock.method(service, "assertUpstreamNameAvailable", async () => {});
 	t.mock.method(service, "get", async () => {
 		if (row.is_deleted) throw new Error("not found");
 		return structuredClone(row);
@@ -177,6 +178,7 @@ test("create holds the host lifecycle until configuration completes", { timeout:
 
 	t.mock.method(host, "isHostnameTaken", async () => ({ is_taken: false }));
 	t.mock.method(host, "cleanSslHstsData", (data) => data);
+	t.mock.method(service, "assertUpstreamNameAvailable", async () => {});
 	t.mock.method(service, "get", async () => {
 		if (!row || row.is_deleted) throw new Error("Proxy Host is deleted");
 		return structuredClone(row);
